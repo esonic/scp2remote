@@ -32,6 +32,10 @@ namespace VSIXScp
         /// </summary>
         private readonly AsyncPackage package;
 
+        private object lock_obj = new object();
+        private RemoteSystem remoteSystem;
+        private IRemoteDirectory directory;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="Command2"/> class.
         /// Adds our command handlers for menu (commands must exist in the command table file)
@@ -46,6 +50,18 @@ namespace VSIXScp
             var menuCommandID = new CommandID(CommandSet, CommandId);
             var menuItem = new MenuCommand(new EventHandler(this.ExecuteAsync), menuCommandID);
             commandService.AddCommand(menuItem);
+
+            try
+            {
+                ConnectionInfoStore connectionInfoStore = new ConnectionInfoStore();
+                connectionInfoStore.Load();
+                if (connectionInfoStore.Connections.Count > 0)
+                {
+                    remoteSystem = new RemoteSystem((ConnectionInfo)connectionInfoStore.Connections[0]);
+                    directory = remoteSystem.FileSystem.GetDirectory(SpecialDirectory.Home);
+                }
+            }
+            catch { }
         }
 
         /// <summary>
@@ -122,52 +138,69 @@ namespace VSIXScp
             }
         }
 
-        public static void ScpToRemote(List<string> files, string dir_path, string dir, IVsOutputWindowPane outputWindowPane)
+        public void ScpToRemote(List<string> files, string dir_path, string dir, IVsOutputWindowPane outputWindowPane)
         {
-            // ThreadHelper.ThrowIfNotOnUIThread();
-            var dte = Package.GetGlobalService(typeof(DTE)) as EnvDTE80.DTE2;
-            dte.Windows.Item(EnvDTE.Constants.vsWindowKindOutput).Activate();
-            if (files.Count == 0)
+            try
             {
-                outputWindowPane.OutputStringThreadSafe("No file can be copied");
-                return;
-            }
-            ConnectionInfoStore connectionInfoStore = new ConnectionInfoStore();
-            connectionInfoStore.Load();
-            if (connectionInfoStore.Connections.Count < 1)
-            {
-                outputWindowPane.OutputStringThreadSafe("No connection found. Add connection in [Tools] / [Options] / [Cross Platform]");
-                return;
-            }
-            outputWindowPane.OutputStringThreadSafe("Connecting...\n");
-            RemoteSystem remoteSystem = new RemoteSystem((ConnectionInfo)connectionInfoStore.Connections[0]);
-            IRemoteDirectory directory = remoteSystem.FileSystem.GetDirectory(SpecialDirectory.Home);
-            int num = 1;
-            int length = files.Count;
-            foreach (string file in files)
-            {
-                string str2 = file.Substring(dir_path.Length);
-                string remoteFileName = directory.FullPath + "/projects/" + dir + str2.Replace('\\', '/');
-                string remotePath = remoteFileName.Substring(0, remoteFileName.LastIndexOf('/'));
-                if (File.Exists(file))
+                lock (lock_obj)
                 {
-                    if (!remoteSystem.FileSystem.Exists(remotePath))
-                        remoteSystem.FileSystem.CreateDirectories(remotePath);
-                    remoteSystem.FileSystem.UploadFile(file, remoteFileName);
-                    outputWindowPane.OutputStringThreadSafe("[" + num++ + "/" + length + "] " + remoteFileName + "\n");
-                }
-                else
-                {
-                    ++num;
-                    outputWindowPane.OutputStringThreadSafe("Skip " + file + " (file not exists)\n");
+                    // ThreadHelper.ThrowIfNotOnUIThread();
+                    var dte = Package.GetGlobalService(typeof(DTE)) as EnvDTE80.DTE2;
+                    dte.Windows.Item(EnvDTE.Constants.vsWindowKindOutput).Activate();
+                    if (files.Count == 0)
+                    {
+                        outputWindowPane.OutputStringThreadSafe("No file can be copied");
+                        return;
+                    }
+                    ConnectionInfoStore connectionInfoStore = new ConnectionInfoStore();
+                    connectionInfoStore.Load();
+                    if (connectionInfoStore.Connections.Count < 1)
+                    {
+                        outputWindowPane.OutputStringThreadSafe("No connection found. Add connection in [Tools] / [Options] / [Cross Platform]");
+                        return;
+                    }
+                    outputWindowPane.OutputStringThreadSafe("Connecting...\n");
+                    if (remoteSystem == null)
+                    {
+                        remoteSystem = new RemoteSystem((ConnectionInfo)connectionInfoStore.Connections[0]);
+                        directory = remoteSystem.FileSystem.GetDirectory(SpecialDirectory.Home);
+                    }
+                    int num = 1;
+                    int length = files.Count;
+                    foreach (string file in files)
+                    {
+                        string str2 = file.Substring(dir_path.Length);
+                        string remoteFileName = directory.FullPath + "/projects/" + dir + str2.Replace('\\', '/');
+                        string remotePath = remoteFileName.Substring(0, remoteFileName.LastIndexOf('/'));
+                        if (File.Exists(file))
+                        {
+                            if (!remoteSystem.FileSystem.Exists(remotePath))
+                                remoteSystem.FileSystem.CreateDirectories(remotePath);
+                            remoteSystem.FileSystem.UploadFile(file, remoteFileName);
+                            outputWindowPane.OutputStringThreadSafe("[" + num++ + "/" + length + "] " + remoteFileName + "\n");
+                        }
+                        else
+                        {
+                            ++num;
+                            outputWindowPane.OutputStringThreadSafe("Skip " + file + " (file not exists)\n");
+                        }
+                    }
+                    remoteSystem.Disconnect();
+                    remoteSystem.Dispose();
+                    outputWindowPane.OutputStringThreadSafe("Copy to " + remoteSystem.ConnectionInfo.HostNameOrAddress + " done.\n");
+                    // prepare for next time
+                    remoteSystem = new RemoteSystem((ConnectionInfo)connectionInfoStore.Connections[0]);
+                    directory = remoteSystem.FileSystem.GetDirectory(SpecialDirectory.Home);
                 }
             }
-            remoteSystem.Disconnect();
-            remoteSystem.Dispose();
-            outputWindowPane.OutputStringThreadSafe("Copy to " + remoteSystem.ConnectionInfo.HostNameOrAddress + " done.\n");
+            catch (Exception ex)
+            {
+                remoteSystem = null;
+                throw ex;
+            }
         }
 
-        private static void Scp(EnvDTE80.DTE2 dte)
+        private void Scp(EnvDTE80.DTE2 dte)
         {
             // ThreadHelper.ThrowIfNotOnUIThread();
             Array selectedItems = dte.ToolWindows.SolutionExplorer.SelectedItems as Array;

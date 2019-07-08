@@ -44,6 +44,14 @@ namespace VSIXScp
             var menuCommandID = new CommandID(CommandSet, CommandId);
             var menuItem = new MenuCommand(new EventHandler(this.ExecuteAsync), menuCommandID);
             commandService.AddCommand(menuItem);
+
+            try
+            {
+                var teamExplorerPage = teamExplorer.NavigateToPage(new Guid(Microsoft.TeamFoundation.Controls.TeamExplorerPageIds.GitChanges), null);
+                var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
+                dte.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer).Activate();
+            }
+            catch { }
         }
 
         /// <summary>
@@ -117,25 +125,50 @@ namespace VSIXScp
                 Microsoft.TeamFoundation.Git.Controls.Extensibility.IChangesExt changesExt;
 
                 teamExplorerPage = teamExplorer.NavigateToPage(new Guid(Microsoft.TeamFoundation.Controls.TeamExplorerPageIds.GitChanges), null);
+                int times = 20;
+                while (teamExplorerPage == null && times-- > 0)
+                {
+                    await Task.Run(() =>
+                    {
+                        System.Threading.Thread.Sleep(500);
+                    });
+                    teamExplorerPage = teamExplorer.NavigateToPage(new Guid(Microsoft.TeamFoundation.Controls.TeamExplorerPageIds.GitChanges), null);
+                }
                 if (teamExplorerPage == null)
                 {
                     throw new ArgumentNullException("TeamExplorerPage", "TeamExplorerPage is null");
                 }
 
+                times = 20;
+                while (teamExplorerPage.IsBusy && times-- > 0)
+                {
+                    await Task.Run(() =>
+                    {
+                        System.Threading.Thread.Sleep(500);
+                    });
+                }
+
                 changesExt = teamExplorerPage.GetExtensibilityService(typeof(Microsoft.TeamFoundation.Git.Controls.Extensibility.IChangesExt))
                    as Microsoft.TeamFoundation.Git.Controls.Extensibility.IChangesExt;
-
-                List<string> files = new List<string>();
-                if (changesExt != null)
+                times = 20;
+                while (changesExt == null && times-- > 0)
                 {
-                    foreach (Microsoft.TeamFoundation.Git.Controls.Extensibility.IChangesPendingChangeItem change in changesExt.IncludedChanges)
+                    await Task.Run(() =>
                     {
-                        files.Add(change.SourceLocalItem);
-                    }
+                        System.Threading.Thread.Sleep(500);
+                    });
+                    changesExt = teamExplorerPage.GetExtensibilityService(typeof(Microsoft.TeamFoundation.Git.Controls.Extensibility.IChangesExt))
+                   as Microsoft.TeamFoundation.Git.Controls.Extensibility.IChangesExt;
                 }
-                else
+                if (changesExt == null)
                 {
                     throw new ArgumentNullException("ChangesExt", "ChangesExt is null");
+                }
+
+                List<string> files = new List<string>();
+                foreach (Microsoft.TeamFoundation.Git.Controls.Extensibility.IChangesPendingChangeItem change in changesExt.IncludedChanges)
+                {
+                    files.Add(change.SourceLocalItem);
                 }
 
                 var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
@@ -186,7 +219,7 @@ namespace VSIXScp
                     var path = new System.IO.DirectoryInfo(git_path);
                     dir = path.Name;
                 }
-                Command2.ScpToRemote(files, git_path, dir, outputWindowPane);
+                Command2.Instance.ScpToRemote(files, git_path, dir, outputWindowPane);
             }
             catch (Exception ex)
             {
