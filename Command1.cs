@@ -28,6 +28,7 @@ namespace VSIXScp
         /// </summary>
         private readonly AsyncPackage package;
         private Microsoft.TeamFoundation.Controls.ITeamExplorer teamExplorer;
+        private Microsoft.TeamFoundation.Controls.ITeamExplorerPage teamExplorerPage;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="Command1"/> class.
@@ -44,14 +45,6 @@ namespace VSIXScp
             var menuCommandID = new CommandID(CommandSet, CommandId);
             var menuItem = new MenuCommand(new EventHandler(this.ExecuteAsync), menuCommandID);
             commandService.AddCommand(menuItem);
-
-            try
-            {
-                var teamExplorerPage = teamExplorer.NavigateToPage(new Guid(Microsoft.TeamFoundation.Controls.TeamExplorerPageIds.GitChanges), null);
-                var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
-                dte.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer).Activate();
-            }
-            catch { }
         }
 
         /// <summary>
@@ -121,10 +114,8 @@ namespace VSIXScp
         {
             try
             {
-                Microsoft.TeamFoundation.Controls.ITeamExplorerPage teamExplorerPage;
                 Microsoft.TeamFoundation.Git.Controls.Extensibility.IChangesExt changesExt;
 
-                teamExplorerPage = teamExplorer.NavigateToPage(new Guid(Microsoft.TeamFoundation.Controls.TeamExplorerPageIds.GitChanges), null);
                 int times = 20;
                 while (teamExplorerPage == null && times-- > 0)
                 {
@@ -164,6 +155,14 @@ namespace VSIXScp
                 {
                     throw new ArgumentNullException("ChangesExt", "ChangesExt is null");
                 }
+                times = 10;
+                while (changesExt.IncludedChanges.Count == 0 && times-- > 0)
+                {
+                    await Task.Run(() =>
+                    {
+                        System.Threading.Thread.Sleep(500);
+                    });
+                }
 
                 List<string> files = new List<string>();
                 foreach (Microsoft.TeamFoundation.Git.Controls.Extensibility.IChangesPendingChangeItem change in changesExt.IncludedChanges)
@@ -171,8 +170,8 @@ namespace VSIXScp
                     files.Add(change.SourceLocalItem);
                 }
 
-                var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
-                dte.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer).Activate();
+                //var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
+                //dte.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer).Activate();
                 await RunCopyAsync(files);
             }
             catch (Exception ex)
