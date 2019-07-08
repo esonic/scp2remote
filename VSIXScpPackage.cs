@@ -48,6 +48,7 @@ namespace VSIXScp
             // Do any initialization that requires the UI thread after switching to the UI thread.
             await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             await Command2.InitializeAsync(this);
+            await Command1.InitializeAsync(this);
         }
 
         #endregion

@@ -1,10 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel.Design;
-using System.Globalization;
 using System.IO;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using EnvDTE;
 using liblinux;
 using liblinux.IO;
@@ -125,9 +122,54 @@ namespace VSIXScp
             }
         }
 
+        public static void ScpToRemote(List<string> files, string dir_path, string dir, IVsOutputWindowPane outputWindowPane)
+        {
+            // ThreadHelper.ThrowIfNotOnUIThread();
+            var dte = Package.GetGlobalService(typeof(DTE)) as EnvDTE80.DTE2;
+            dte.Windows.Item(EnvDTE.Constants.vsWindowKindOutput).Activate();
+            if (files.Count == 0)
+            {
+                outputWindowPane.OutputStringThreadSafe("No file can be copied");
+                return;
+            }
+            ConnectionInfoStore connectionInfoStore = new ConnectionInfoStore();
+            connectionInfoStore.Load();
+            if (connectionInfoStore.Connections.Count < 1)
+            {
+                outputWindowPane.OutputStringThreadSafe("No connection found. Add connection in [Tools] / [Options] / [Cross Platform]");
+                return;
+            }
+            outputWindowPane.OutputStringThreadSafe("Connecting...\n");
+            RemoteSystem remoteSystem = new RemoteSystem((ConnectionInfo)connectionInfoStore.Connections[0]);
+            IRemoteDirectory directory = remoteSystem.FileSystem.GetDirectory(SpecialDirectory.Home);
+            int num = 1;
+            int length = files.Count;
+            foreach (string file in files)
+            {
+                string str2 = file.Substring(dir_path.Length);
+                string remoteFileName = directory.FullPath + "/projects/" + dir + str2.Replace('\\', '/');
+                string remotePath = remoteFileName.Substring(0, remoteFileName.LastIndexOf('/'));
+                if (File.Exists(file))
+                {
+                    if (!remoteSystem.FileSystem.Exists(remotePath))
+                        remoteSystem.FileSystem.CreateDirectories(remotePath);
+                    remoteSystem.FileSystem.UploadFile(file, remoteFileName);
+                    outputWindowPane.OutputStringThreadSafe("[" + num++ + "/" + length + "] " + remoteFileName + "\n");
+                }
+                else
+                {
+                    ++num;
+                    outputWindowPane.OutputStringThreadSafe("Skip " + file + " (file not exists)\n");
+                }
+            }
+            remoteSystem.Disconnect();
+            remoteSystem.Dispose();
+            outputWindowPane.OutputStringThreadSafe("Copy to " + remoteSystem.ConnectionInfo.HostNameOrAddress + " done.\n");
+        }
+
         private static void Scp(EnvDTE80.DTE2 dte)
         {
-            //ThreadHelper.ThrowIfNotOnUIThread();
+            // ThreadHelper.ThrowIfNotOnUIThread();
             Array selectedItems = dte.ToolWindows.SolutionExplorer.SelectedItems as Array;
             if (selectedItems == null)
                 return;
@@ -145,6 +187,7 @@ namespace VSIXScp
 
             outputWindowPane.Clear();
             outputWindowPane.Activate();
+            // dte.Windows.Item("{34E76E81-EE4A-11D0-AE2E-00A0C90FFFC3}").Activate();
 
             Array solutionProjects = dte.ActiveSolutionProjects as Array;
             if (solutionProjects.Length < 1)
@@ -158,51 +201,31 @@ namespace VSIXScp
                 outputWindowPane.OutputStringThreadSafe("Invalid active project type.");
                 return;
             }
-            string directoryName = Path.GetDirectoryName(project.FullName);
-            ConnectionInfoStore connectionInfoStore = new ConnectionInfoStore();
-            connectionInfoStore.Load();
-            if (connectionInfoStore.Connections.Count < 1)
-            {
-                outputWindowPane.OutputStringThreadSafe("No connection found. Add connection in [Tools] / [Options] / [Cross Platform]");
-                return;
-            }
-            outputWindowPane.OutputStringThreadSafe("Connecting...\n");
-            dte.Windows.Item("{34E76E81-EE4A-11D0-AE2E-00A0C90FFFC3}").Activate();
-            RemoteSystem remoteSystem = new RemoteSystem((ConnectionInfo)connectionInfoStore.Connections[0]);
-            IRemoteDirectory directory = remoteSystem.FileSystem.GetDirectory(SpecialDirectory.Home);
-            int num = 1;
-            int length = selectedItems.Length;
+
+            List<string> files = new List<string>();
             foreach (UIHierarchyItem uiHierarchyItem in selectedItems)
             {
                 ProjectItem projectItem = uiHierarchyItem.Object as ProjectItem;
                 if (projectItem == null)
                 {
-                    ++num;
                     outputWindowPane.OutputStringThreadSafe("Skip " + uiHierarchyItem.Name + " (not a project item)\n");
                 }
                 else
                 {
-                    string str1 = projectItem.Properties.Item((object)"FullPath").Value.ToString();
-                    string str2 = str1.Substring(directoryName.Length);
-                    string remoteFileName = directory.FullPath + "/projects/" + project.Name + str2.Replace('\\', '/');
-                    string remotePath = remoteFileName.Substring(0, remoteFileName.LastIndexOf('/'));
-                    if (File.Exists(str1))
+                    string file = projectItem.Properties.Item("FullPath").Value.ToString();
+                    if (File.Exists(file))
                     {
-                        if (!remoteSystem.FileSystem.Exists(remotePath))
-                            remoteSystem.FileSystem.CreateDirectories(remotePath);
-                        remoteSystem.FileSystem.UploadFile(str1, remoteFileName);
-                        outputWindowPane.OutputStringThreadSafe("[" + (object)num++ + "/" + (object)length + "] " + remoteFileName + "\n");
+                        files.Add(file);
                     }
                     else
                     {
-                        ++num;
                         outputWindowPane.OutputStringThreadSafe("Skip " + uiHierarchyItem.Name + " (file not exists)\n");
                     }
                 }
             }
-            remoteSystem.Disconnect();
-            remoteSystem.Dispose();
-            outputWindowPane.OutputStringThreadSafe("Copy to " + remoteSystem.ConnectionInfo.HostNameOrAddress + " done.\n");
+
+            string directoryName = Path.GetDirectoryName(project.FullName);
+            ScpToRemote(files, directoryName, project.Name, outputWindowPane);
         }
     }
 }
