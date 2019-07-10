@@ -176,6 +176,7 @@ namespace VSIXScp
             }
             catch (Exception ex)
             {
+                teamExplorerPage = null;
                 VsShellUtilities.ShowMessageBox(
                                 this.package,
                                 ex.ToString() + "\r\n" + ex.StackTrace.ToString(),
