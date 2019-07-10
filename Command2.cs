@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.ComponentModel.Design;
 using System.IO;
+using System.Threading;
 using EnvDTE;
 using liblinux;
 using liblinux.IO;
@@ -165,25 +166,47 @@ namespace VSIXScp
                         remoteSystem = new RemoteSystem((ConnectionInfo)connectionInfoStore.Connections[0]);
                         directory = remoteSystem.FileSystem.GetDirectory(SpecialDirectory.Home);
                     }
-                    int num = 1;
-                    int length = files.Count;
-                    foreach (string file in files)
+                    using (var concurrencySemaphore = new System.Threading.SemaphoreSlim(8))
                     {
-                        string str2 = file.Substring(dir_path.Length);
-                        string remoteFileName = directory.FullPath + "/projects/" + dir + str2.Replace('\\', '/');
-                        string remotePath = remoteFileName.Substring(0, remoteFileName.LastIndexOf('/'));
-                        if (File.Exists(file))
+                        int num = 0;
+                        int length = files.Count;
+                        List<Task> tasks = new List<Task>();
+                        foreach (string file in files)
                         {
-                            if (!remoteSystem.FileSystem.Exists(remotePath))
-                                remoteSystem.FileSystem.CreateDirectories(remotePath);
-                            remoteSystem.FileSystem.UploadFile(file, remoteFileName);
-                            outputWindowPane.OutputStringThreadSafe("[" + num++ + "/" + length + "] " + remoteFileName + "\n");
+                            concurrencySemaphore.Wait();
+                            var t = Task.Run(() =>
+                            {
+                                try
+                                {
+                                    string str2 = file.Substring(dir_path.Length);
+                                    string remoteFileName = directory.FullPath + "/projects/" + dir + str2.Replace('\\', '/');
+                                    string remotePath = remoteFileName.Substring(0, remoteFileName.LastIndexOf('/'));
+                                    if (File.Exists(file))
+                                    {
+                                        if (!remoteSystem.FileSystem.Exists(remotePath))
+                                            remoteSystem.FileSystem.CreateDirectories(remotePath);
+                                        remoteSystem.FileSystem.UploadFile(file, remoteFileName);
+                                        outputWindowPane.OutputStringThreadSafe("[" + Interlocked.Increment(ref num) + "/" + length + "] " + remoteFileName + "\n");
+                                    }
+                                    else
+                                    {
+                                        Interlocked.Increment(ref num);
+                                        outputWindowPane.OutputStringThreadSafe("Skip " + file + " (file not exists)\n");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Interlocked.Increment(ref num);
+                                    outputWindowPane.OutputStringThreadSafe("Upload failed: " + file + "\n");
+                                }
+                                finally
+                                {
+                                    concurrencySemaphore.Release();
+                                }
+                            });
+                            tasks.Add(t);
                         }
-                        else
-                        {
-                            ++num;
-                            outputWindowPane.OutputStringThreadSafe("Skip " + file + " (file not exists)\n");
-                        }
+                        Task.WaitAll(tasks.ToArray());
                     }
                     remoteSystem.Disconnect();
                     remoteSystem.Dispose();
