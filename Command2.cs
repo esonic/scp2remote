@@ -166,48 +166,60 @@ namespace VSIXScp
                         remoteSystem = new RemoteSystem((ConnectionInfo)connectionInfoStore.Connections[0]);
                         directory = remoteSystem.FileSystem.GetDirectory(SpecialDirectory.Home);
                     }
-
-                    int num = 0;
-                    int length = files.Count;
-                    foreach (string file in files)
+                    using (var concurrencySemaphore = new System.Threading.SemaphoreSlim(8))
                     {
-                        string str2 = file.Substring(dir_path.Length);
-                        string remoteFileName = directory.FullPath + "/projects/" + dir + str2.Replace('\\', '/');
-                        string remotePath = remoteFileName.Substring(0, remoteFileName.LastIndexOf('/'));
-                        try
+                        int num = 0;
+                        int length = files.Count;
+                        List<Task> tasks = new List<Task>();
+                        foreach (string file in files)
                         {
-                            if (File.Exists(file))
+                            concurrencySemaphore.Wait();
+                            var t = Task.Run(() =>
                             {
-                                remoteSystem.FileSystem.UploadFile(file, remoteFileName);
-                                outputWindowPane.OutputStringThreadSafe("[" + Interlocked.Increment(ref num) + "/" + length + "] " + remoteFileName + "\n");
-                            }
-                            else
-                            {
-                                Interlocked.Increment(ref num);
-                                outputWindowPane.OutputStringThreadSafe("Skip " + file + " (file not exists)\n");
-                            }
+                                string str2 = file.Substring(dir_path.Length);
+                                string remoteFileName = directory.FullPath + "/projects/" + dir + str2.Replace('\\', '/');
+                                string remotePath = remoteFileName.Substring(0, remoteFileName.LastIndexOf('/'));
+                                try
+                                {
+                                    if (File.Exists(file))
+                                    {
+                                        remoteSystem.FileSystem.UploadFile(file, remoteFileName);
+                                        outputWindowPane.OutputStringThreadSafe("[" + Interlocked.Increment(ref num) + "/" + length + "] " + remoteFileName + "\n");
+                                    }
+                                    else
+                                    {
+                                        Interlocked.Increment(ref num);
+                                        outputWindowPane.OutputStringThreadSafe("Skip " + file + " (file not exists)\n");
+                                    }
+                                }
+                                catch (liblinux.IO.IOException ex1)
+                                {
+                                    if (ex1.Message.Contains("No such file"))
+                                    {
+                                        remoteSystem.FileSystem.CreateDirectories(remotePath);
+                                        remoteSystem.FileSystem.UploadFile(file, remoteFileName);
+                                        outputWindowPane.OutputStringThreadSafe("[" + Interlocked.Increment(ref num) + "/" + length + "] " + remoteFileName + "\n");
+                                    }
+                                    else
+                                    {
+                                        Interlocked.Increment(ref num);
+                                        outputWindowPane.OutputStringThreadSafe("Upload failed: " + file + "\n");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Interlocked.Increment(ref num);
+                                    outputWindowPane.OutputStringThreadSafe("Upload failed: " + file + ", ex: " + ex.ToString() + "\n");
+                                }
+                                finally
+                                {
+                                    concurrencySemaphore.Release();
+                                }
+                            });
+                            tasks.Add(t);
                         }
-                        catch (liblinux.IO.IOException ex1)
-                        {
-                            if (ex1.Message.Contains("No such file"))
-                            {
-                                remoteSystem.FileSystem.CreateDirectories(remotePath);
-                                remoteSystem.FileSystem.UploadFile(file, remoteFileName);
-                                outputWindowPane.OutputStringThreadSafe("[" + Interlocked.Increment(ref num) + "/" + length + "] " + remoteFileName + "\n");
-                            }
-                            else
-                            {
-                                Interlocked.Increment(ref num);
-                                outputWindowPane.OutputStringThreadSafe("Upload failed: " + file + "\n");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Interlocked.Increment(ref num);
-                            outputWindowPane.OutputStringThreadSafe("Upload failed: " + file + ", ex: " + ex.ToString() + "\n");
-                        }
+                        Task.WaitAll(tasks.ToArray());
                     }
-
                     remoteSystem.Disconnect();
                     remoteSystem.Dispose();
                     outputWindowPane.OutputStringThreadSafe("Copy to " + remoteSystem.ConnectionInfo.HostNameOrAddress + " done.\n");
